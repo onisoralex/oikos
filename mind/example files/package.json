@@ -1,0 +1,9 @@
+{
+  "name": "coffee-shop",
+  "private": true,
+  "type": "module",
+  "workspaces": ["client", "server", "packages/*"],
+  "engines": {
+    "node": ">=25.9.0"
+  }
+}

@@ -1,0 +1,27 @@
+FROM node:25.9.0-alpine
+WORKDIR /app
+
+# Prisma's query engine is a native binary that dynamically links against OpenSSL.
+# Alpine ships without it, so we install it explicitly. Must come before npm install
+# so that `prisma generate` (run during npm install postinstall) can find the library.
+RUN apk add --no-cache openssl
+
+# Copy workspace manifests first — Docker caches this layer until any package.json changes.
+# client/ is included because Vite runs as Express middleware and needs its own packages.
+COPY package.json ./
+COPY server/package.json ./server/
+COPY client/package.json ./client/
+COPY packages/shared/package.json ./packages/shared/
+
+RUN npm install
+
+# Prisma schema must be baked in at build time for client generation.
+# If schema.prisma changes, rebuild the image: docker-compose build server
+COPY server/prisma ./server/prisma
+RUN npm run db:generate --workspace=server
+
+# Source code is bind-mounted at runtime for hot reload (see docker-compose.yaml volumes).
+# prisma db push syncs the schema to the DB on every container start (no-op if schema unchanged).
+# nodemon --legacy-watch enables chokidar polling, which is required on Windows Docker
+# bind mounts where inotify events from the Windows filesystem never reach the container.
+CMD ["sh", "-c", "npx prisma db push --schema=./server/prisma/schema.prisma && npx nodemon --legacy-watch --watch server/src --ext ts --exec 'npx tsx server/src/index.ts'"]

@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-coffee}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-coffee}
+      POSTGRES_DB: ${POSTGRES_DB:-coffeedb}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-coffee} -d ${POSTGRES_DB:-coffeedb}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile.dev
+    # Bind-mount source directories so tsx watch / Vite HMR picks up file changes without rebuilding.
+    # node_modules and the generated Prisma client stay inside the container — do not mount those.
+    # server/prisma is mounted so seed.ts can be edited without a rebuild. If schema.prisma
+    # changes, a rebuild is still required to re-run prisma generate.
+    volumes:
+      - ./server/src:/app/server/src
+      - ./server/prisma:/app/server/prisma
+      - ./server/uploads:/app/server/uploads
+      - ./client:/app/client
+      - ./packages/shared/src:/app/packages/shared/src
+    ports:
+      - "3001:3001"
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
