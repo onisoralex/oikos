@@ -9,7 +9,7 @@ Do not block earlier phases on these — pick them up at the module boundary.
 |---|---|---|---|
 | OQ-1 | Which bank(s) does Alex use? What export format — CSV, MT940, CAMT.053? _(Sample file to be provided — see `mind/example files/`)_ | Finance Module — importer | Phase 3 |
 | OQ-2 | Recipe OCR: printed books/cards only, or handwritten cards too? | Recipe Module — UX & extraction prompt | Phase 2 |
-| OQ-3 | Does the server have a public domain name, or LAN-only? Affects TLS/HTTPS strategy for barcode camera access on iOS. | Pantry Module — barcode scanner | Phase 1 |
+| OQ-3 | HTTPS strategy for barcode scanning: domain + Let's Encrypt, self-signed cert, or accept localhost-only? Barcode scanning via camera (`getUserMedia`) requires HTTPS on non-localhost devices. **v1 ships manual entry only — barcode scanning is an optional enhancement.** Decide before implementing the scan UI. | Pantry Module — barcode scanner (optional v1+) | Phase 1 enhancement |
 | OQ-4 | Gardening Specialist UX: chat interface (streaming session) or periodic report pushed to user? | Plant & Garden Module | Phase 5 |
 | OQ-5 | Weather/humidity data source for plant watering logic: local sensor (Home Assistant?), open weather API, or manual input? | Plant & Garden Module | Phase 5 |
 | OQ-6 | Single-user forever, or might other household members use it? Affects auth design. | Foundation | Phase 0 |

@@ -2,518 +2,468 @@
 
 **Status:** Ready to implement
 **Date:** 2026-05-13
-**Produced by:** Tech Specialist (task: oikos-architecture-specs-20260513-000001)
 **Depends on:** Nothing — this is the base layer.
 
 ---
 
 ## Overview
 
-Phase 0 builds the skeleton every other module runs on: Docker Compose, Express backend scaffold, PostgreSQL with migrations, single-user auth, Claude CLI wrapper, React + Vite + MUI frontend scaffold, and the dev workflow. No feature logic lives here.
+Phase 0 builds the skeleton every other module runs on: Docker Compose with a single server service, Express + Vite middleware, PostgreSQL with Prisma, JWT single-user auth, Claude CLI wrapper, and the full TypeScript scaffold for both server and client. No feature logic lives here.
 
 ---
 
 ## 1. Docker Compose
 
-Full service definition lives in `docker-compose.yml` at the repo root. See `docs/architecture.md §6` for the complete YAML.
+Full YAML in `docs/architecture.md §6`. Key points:
 
-### Key points for the Developer:
+- **Single `server` service** — Express serves both the API and the Vite frontend on port 3001.
+- **`nodemon --legacy-watch`** — required on Windows Docker bind mounts. inotify events from the Windows filesystem do not reach the Linux container; polling is the fallback.
+- **PostgreSQL health check** — `server` must wait for `db` via `condition: service_healthy`.
+- **`server/uploads/` bind mount** — keep uploaded files on the host so they survive container rebuilds.
 
-**Multi-stage Dockerfiles.** Both `backend/` and `frontend/` need multi-stage Dockerfiles with `dev` and `prod` targets.
+### `server/Dockerfile.dev`
 
-**`backend/Dockerfile`:**
 ```dockerfile
-# Stage: dev
-FROM node:22-alpine AS dev
+FROM node:22-alpine
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY . .
-CMD ["npx", "nodemon", "src/server.js"]
 
-# Stage: prod
-FROM node:22-alpine AS prod
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --omit=dev
-COPY . .
-CMD ["node", "src/server.js"]
+# Prisma query engine needs OpenSSL on Alpine
+RUN apk add --no-cache openssl
+
+# Workspace manifests first — Docker caches this layer until any package.json changes
+COPY package.json ./
+COPY server/package.json ./server/
+COPY client/package.json ./client/
+COPY packages/shared/package.json ./packages/shared/
+
+RUN npm install
+
+# Prisma schema baked in at build time — client generation runs during npm install (postinstall)
+COPY server/prisma ./server/prisma
+RUN npm run db:generate --workspace=server
+
+# Source is bind-mounted at runtime for HMR (see docker-compose.yaml)
+# prisma db push syncs schema on start (no-op if unchanged)
+# nodemon --legacy-watch required on Windows bind mounts
+CMD ["sh", "-c", "npx prisma db push --schema=./server/prisma/schema.prisma && npx nodemon --legacy-watch --watch server/src --ext ts --exec 'npx tsx server/src/index.ts'"]
 ```
 
-**`frontend/Dockerfile`:**
-```dockerfile
-# Stage: dev
-FROM node:22-alpine AS dev
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY . .
-EXPOSE 5173
-CMD ["npx", "vite", "--host", "0.0.0.0"]
+**After any schema change:** run `docker compose restart server`. `tsx watch` caches the Prisma client — it does not reload native modules. New fields will return `undefined` until the container is restarted.
 
-# Stage: build
-FROM dev AS builder
-RUN npx vite build
+### Root `package.json`
 
-# Stage: prod
-FROM nginx:alpine AS prod
-COPY --from=builder /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-```
-
-**`frontend/nginx.conf`** (for prod static serving with React Router):
-```nginx
-server {
-  listen 80;
-  root /usr/share/nginx/html;
-  index index.html;
-
-  location / {
-    try_files $uri $uri/ /index.html;
-  }
-
-  location /api/ {
-    proxy_pass http://backend:3001;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-  }
+```json
+{
+  "name": "oikos",
+  "private": true,
+  "type": "module",
+  "workspaces": ["client", "server", "packages/*"],
+  "engines": { "node": ">=22.0.0" }
 }
 ```
 
-### Volumes
-- `db_data` — PostgreSQL data, named volume (survives container restart)
-- `uploads` — user-uploaded files (recipe images, bank statement files, plant photos), named volume
+---
 
-### Health check
-PostgreSQL service should include a health check so the backend does not start before the DB is ready:
-```yaml
-healthcheck:
-  test: ["CMD-SHELL", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
-  interval: 5s
-  timeout: 3s
-  retries: 10
+## 2. TypeScript Configuration
+
+### `server/tsconfig.json`
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "outDir": "dist",
+    "rootDir": "src",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
 ```
-Backend should have `depends_on: db: condition: service_healthy`.
+
+### `packages/shared/package.json`
+
+```json
+{
+  "name": "@oikos/shared",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" }
+}
+```
+
+`@oikos/shared` is the only place shared types and Zod schemas live. Server and client both import from here. Never duplicate type definitions across packages.
 
 ---
 
-## 2. Backend Scaffold
+## 3. Express + Vite Middleware
 
-### Entry points
+### `server/src/index.ts` — entry point
 
-**`backend/src/server.js`** — binds the port, nothing else:
-```javascript
-const app = require('./app');
-const { PORT } = require('./config');
+```typescript
+import { createServer } from "vite";
+import app from "./app.js";
+import { PORT, NODE_ENV } from "./config.js";
 
-app.listen(PORT, () => {
-  console.log(`Oikos backend listening on port ${PORT}`);
-});
+const startServer = async () => {
+  if (NODE_ENV === "development") {
+    const vite = await createServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  }
+
+  app.listen(PORT, () => {
+    console.log(`Oikos running on port ${PORT}`);
+  });
+};
+
+startServer();
 ```
 
-**`backend/src/app.js`** — Express app factory:
-```javascript
-const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
-const cookieSession = require('cookie-session');
-const { SESSION_SECRET, CORS_ORIGIN } = require('./config');
-const errorHandler = require('./middleware/errorHandler');
-const authRoutes = require('./modules/auth/auth.routes');
-// ... module routes
+In production, serve the static Vite build instead:
+```typescript
+import { resolve } from "path";
+app.use(express.static(resolve("../client/dist")));
+app.get("*", (_, res) => res.sendFile(resolve("../client/dist/index.html")));
+```
+
+### `server/src/app.ts` — Express app factory
+
+```typescript
+import express from "express";
+import cors from "cors";
+import helmet from "helmet";
+import { SESSION_SECRET, CORS_ORIGIN } from "./config.js";
+import { authMiddleware } from "./middleware/auth.js";
+import { errorHandler } from "./middleware/errorHandler.js";
+import authRoutes from "./modules/auth/auth.routes.js";
 
 const app = express();
 
-app.use(helmet());
+app.use(helmet({ contentSecurityPolicy: false })); // CSP disabled — Vite middleware needs it off in dev
 app.use(cors({ origin: CORS_ORIGIN, credentials: true }));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
-app.use(cookieSession({
-  name: 'session',
-  secret: SESSION_SECRET,
-  maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-  httpOnly: true,
-  sameSite: 'lax',
-  secure: process.env.NODE_ENV === 'production',
-}));
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
+app.get("/api/health", (_, res) => res.json({ status: "ok", ts: new Date().toISOString() }));
 
-app.use('/api/auth', authRoutes);
-// app.use('/api/v1/pantry', require('./modules/pantry/pantry.routes'));
-// ... add modules here as they are built
+app.use("/api/auth", authRoutes);
+// app.use("/api/v1/pantry", authMiddleware, pantryRoutes);  ← add modules here
 
 app.use(errorHandler);
 
-module.exports = app;
+export default app;
 ```
 
 ### Middleware stack (order matters)
-1. `helmet` — security headers
-2. `cors` — with `credentials: true` so the frontend can send cookies cross-origin in dev
-3. `express.json` — body parsing
-4. `express.urlencoded` — form data
-5. `cookie-session` — signed session cookie
-6. Route handlers
-7. `errorHandler` — must be last
-
-### Error handler
-
-**`backend/src/middleware/errorHandler.js`:**
-```javascript
-module.exports = (err, req, res, next) => {
-  console.error(err);
-  const status = err.status || err.statusCode || 500;
-  res.status(status).json({
-    success: false,
-    error: {
-      code: err.code || 'INTERNAL_ERROR',
-      message: err.message || 'An unexpected error occurred',
-      details: err.details || null,
-    },
-  });
-};
-```
-
-Controllers throw errors using a simple factory:
-```javascript
-// src/lib/errors.js
-class AppError extends Error {
-  constructor(message, status = 500, code = 'INTERNAL_ERROR', details = null) {
-    super(message);
-    this.status = status;
-    this.code = code;
-    this.details = details;
-  }
-}
-module.exports = { AppError };
-```
-
-### Health endpoint
-`GET /api/health` — no auth required. Returns `200 { status: 'ok', ts: <ISO timestamp> }`. Used by Docker health checks and uptime monitors.
-
-### Required npm packages (backend)
-```
-express
-cors
-helmet
-cookie-session
-pg                  ← node-postgres (not pg-promise; raw pg for control)
-node-pg-migrate     ← migration tool (see §3)
-multer              ← file upload middleware
-dotenv
-```
-
-Dev dependencies:
-```
-nodemon
-```
+1. `helmet` — security headers (CSP off in dev for Vite HMR)
+2. `cors` — credentials: true for cookie-less JWT flow
+3. `express.json` + `express.urlencoded`
+4. Route handlers
+5. `errorHandler` — always last
 
 ---
 
-## 3. Database Setup
+## 4. Database — Prisma
 
-### Connection pool
+### `server/src/db/client.ts`
 
-**`backend/src/db/pool.js`:**
-```javascript
-const { Pool } = require('pg');
-const { DATABASE_URL } = require('../config');
+```typescript
+import { PrismaClient } from "@prisma/client";
 
-const pool = new Pool({ connectionString: DATABASE_URL });
+const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
 
-pool.on('error', (err) => {
-  console.error('Unexpected PostgreSQL pool error:', err);
-  process.exit(1);
-});
+export const prisma =
+  globalForPrisma.prisma ?? new PrismaClient({ log: ["error"] });
 
-module.exports = pool;
+if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
 ```
 
-All SQL queries use `pool.query(sql, params)`. There is no ORM. Query functions live in `*.model.js` files for each module.
+Import `{ prisma }` in service files. Never instantiate `PrismaClient` elsewhere.
 
-### Migration tool: `node-pg-migrate`
+### `server/package.json` scripts
 
-**Why node-pg-migrate over db-migrate:**
-- `node-pg-migrate` is PostgreSQL-specific and has first-class support for PostgreSQL features (partitioning, enums, array types, JSONB). `db-migrate` is database-agnostic, which means it supports a lowest-common-denominator DDL API and requires raw SQL for anything PostgreSQL-specific. Since Oikos uses JSONB and text arrays extensively, `node-pg-migrate` is the better fit.
-- Active maintenance (2026), TypeScript definitions available, good CLI.
-
-**Setup:**
-
-`package.json` scripts:
 ```json
 {
   "scripts": {
-    "migrate": "node-pg-migrate up",
-    "migrate:down": "node-pg-migrate down",
-    "migrate:create": "node-pg-migrate create"
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "db:generate": "prisma generate --schema=prisma/schema.prisma",
+    "db:push": "prisma db push --schema=prisma/schema.prisma",
+    "db:migrate": "prisma migrate dev --schema=prisma/schema.prisma",
+    "db:deploy": "prisma migrate deploy --schema=prisma/schema.prisma",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:studio": "prisma studio --schema=prisma/schema.prisma"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   }
 }
 ```
 
-`.env` or env vars for the migration CLI:
-```
-DATABASE_URL=postgresql://oikos:changeme@localhost:5432/oikos
-```
+### Initial `server/prisma/schema.prisma`
 
-Migration files live in `backend/src/db/migrations/`. The tool creates a `pgmigrations` table to track applied migrations.
+```prisma
+generator client {
+  provider = "prisma-client-js"
+}
 
-**Initial migration `001_initial.js`** should create the foundation tables only — specifically the `accounts` table and `transactions` table are not part of Phase 0. Phase 0 migration creates nothing application-specific: the first module migration (Phase 1: Pantry) creates the first real tables. Phase 0 can contain a single migration that just verifies the connection and adds a `pgmigrations` table (node-pg-migrate does this automatically on first run).
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Module models are added here as each phase is implemented.
+// Phase 1 (Pantry) adds: Product, PantryItem
+// Phase 2 (Recipes) adds: Recipe, RecipeIngredient, RecipeRating
+// etc.
+```
 
 ---
 
-## 4. Auth — Single-User Session
+## 5. Auth — Single-User JWT
 
-### Approach: environment-variable password + signed cookie session (no user table)
+### Approach: env-var password + JWT (no user table)
 
-**Rationale:**
-- Oikos is a strictly single-user application. A `users` table adds complexity (password hashing, user management API, signup flow) with zero benefit — there is only ever one user.
-- `APP_PASSWORD` is set in the environment (`.env`). The login endpoint checks the submitted password against it via `crypto.timingSafeEqual` to prevent timing attacks.
-- `cookie-session` (using `keygrip` under the hood) signs the session cookie with `SESSION_SECRET`. No server-side session store required — the session data is in the cookie itself. For a single user with a 30-day session, this is sufficient.
-- If the `APP_PASSWORD` is ever compromised, rotating it and the `SESSION_SECRET` in `.env` and restarting the container is the full remediation.
+**Rationale:** Oikos is single-user. A `User` table adds password hashing, signup flow, and user management with no benefit. `APP_PASSWORD` is set in `.env`. The login endpoint validates against it using `crypto.timingSafeEqual` (prevents timing attacks). On success it issues a JWT signed with `JWT_SECRET`. The client stores the token in `authStore` (Zustand, in-memory — not persisted to localStorage, so a page refresh re-prompts login).
 
-**Auth module:**
+### `server/src/modules/auth/auth.routes.ts`
 
-`backend/src/modules/auth/auth.routes.js`:
-- `POST /api/auth/login` — body: `{ password }`. Validates against `APP_PASSWORD`. Sets `req.session.authenticated = true`. Returns `200` on success, `401` on wrong password.
-- `POST /api/auth/logout` — clears session. Returns `200`.
-- `GET /api/auth/me` — returns `{ authenticated: true }` if session is valid, `401` otherwise.
+- `POST /api/auth/login` — body: `{ password: string }`. Validates against `APP_PASSWORD`. Returns `{ token: string }`.
+- `POST /api/auth/logout` — client discards the token. Server is stateless (no token blacklist needed for single-user).
+- `GET /api/auth/me` — returns `{ ok: true }` if token is valid; `401` otherwise.
 
-`backend/src/middleware/auth.js` (applied to all `/api/v1/*` routes):
-```javascript
-module.exports = (req, res, next) => {
-  if (!req.session || !req.session.authenticated) {
-    return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Not authenticated' } });
+### `server/src/middleware/auth.ts`
+
+```typescript
+import jwt from "jsonwebtoken";
+import { JWT_SECRET } from "../config.js";
+import { AppError } from "../lib/errors.js";
+
+export const authMiddleware = (req, res, next) => {
+  const header = req.headers.authorization;
+  if (!header?.startsWith("Bearer ")) throw new AppError("Not authenticated", 401, "UNAUTHORIZED");
+  const token = header.slice(7);
+  try {
+    jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    throw new AppError("Invalid or expired token", 401, "UNAUTHORIZED");
   }
-  next();
 };
 ```
 
-All routes registered under `/api/v1/` should have the auth middleware applied globally. Routes under `/api/auth/` and `/api/health` are public.
+Apply to all `/api/v1/*` routes. `/api/auth/*` and `/api/health` are public.
 
----
+### `server/src/lib/errors.ts`
 
-## 5. Claude CLI Wrapper
-
-**`backend/src/services/claude.js`**
-
-This module wraps `child_process.exec` / `spawn` for all Claude CLI invocations. No other module calls `exec` for Claude — they all go through this service.
-
-### Interface (method signatures and return types)
-
-```javascript
-/**
- * Single-turn prompt. No session. Returns the response text.
- * @param {string} prompt - The full prompt text.
- * @param {object} options
- * @param {string} [options.model] - Claude model (e.g. 'claude-haiku-4-5'). Default: claude CLI default.
- * @param {string} [options.contextFile] - Path to a temp file to pipe as additional context.
- * @returns {Promise<string>} - Claude's response text (stdout), trimmed.
- */
-async function singleTurn(prompt, options = {}) {}
-
-/**
- * Session-based prompt. Maintains conversation across calls with the same sessionId.
- * @param {string} sessionId - Unique session identifier (e.g. 'garden-<userId>-<timestamp>').
- * @param {string} prompt - The user's message for this turn.
- * @param {object} options
- * @param {string} [options.model]
- * @returns {Promise<string>} - Claude's response text, trimmed.
- */
-async function sessionTurn(sessionId, prompt, options = {}) {}
-
-/**
- * Image prompt (vision). For OCR, plant photo analysis.
- * @param {string} imagePath - Absolute path to image file in the uploads volume.
- * @param {string} prompt - The instruction to apply to the image.
- * @param {object} options
- * @param {string} [options.model]
- * @returns {Promise<string>} - Claude's response text, trimmed.
- */
-async function imageTurn(imagePath, prompt, options = {}) {}
-
-module.exports = { singleTurn, sessionTurn, imageTurn };
+```typescript
+export class AppError extends Error {
+  constructor(
+    message: string,
+    public status = 500,
+    public code = "INTERNAL_ERROR",
+    public details: unknown = null,
+  ) {
+    super(message);
+  }
+}
 ```
 
-### Implementation notes for the Developer:
-- Use `child_process.exec` wrapped in a `Promise`. Set a generous timeout (120 seconds for large prompts).
-- `stdout` is the response. `stderr` should be checked — non-empty stderr is logged as a warning, not always a hard error (the Claude CLI may emit progress to stderr). A non-zero exit code is always an error.
-- For `contextFile`: write the context to `/tmp/oikos-<uuid>.json` before calling, read back, then `fs.unlink` it in a `finally` block.
-- For `imagePath`: verify the file exists before calling. The `--image` flag syntax needs to be confirmed against the installed Claude CLI version — document the exact flag in a comment.
-- All methods should reject with an `AppError` (status 502) on Claude CLI failure so the error handler can return a clean response to the frontend.
-- Do not implement streaming in Phase 0. Phase 5 (Gardening chat) can add streaming via `spawn` if needed.
+---
+
+## 6. Claude CLI Wrapper
+
+**`server/src/services/claude.ts`** — all AI calls go through this. No other file calls `exec` for Claude.
+
+### Interface
+
+```typescript
+/** Single-turn prompt. */
+export const singleTurn = async (
+  prompt: string,
+  options?: { model?: string; contextFile?: string }
+): Promise<string> => { ... };
+
+/** Session-based multi-turn (Gardening Specialist chat). */
+export const sessionTurn = async (
+  sessionId: string,
+  prompt: string,
+  options?: { model?: string }
+): Promise<string> => { ... };
+
+/** Image prompt for OCR and photo analysis. */
+export const imageTurn = async (
+  imagePath: string,
+  prompt: string,
+  options?: { model?: string }
+): Promise<string> => { ... };
+```
+
+**Implementation notes:**
+- Wrap `child_process.exec` in a Promise. Timeout: 120 seconds.
+- `stdout` is the response. Non-zero exit code → throw `AppError(502)`.
+- `contextFile`: write context to `/tmp/oikos-<uuid>.json`, pipe to stdin, delete in `finally`.
+- `imagePath`: verify file exists before calling. Document the exact `--image` flag syntax in a comment once confirmed against the installed Claude CLI version.
+- Do not implement streaming in Phase 0.
 
 ---
 
-## 6. Frontend Scaffold
+## 7. Frontend Scaffold
 
-### Vite config (`frontend/vite.config.js`)
-```javascript
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+### `client/vite.config.ts`
+
+```typescript
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: '0.0.0.0',  // required for Docker
+    host: "0.0.0.0",
     port: 5173,
-    proxy: {
-      '/api': {
-        target: 'http://backend:3001',  // Docker service name
-        changeOrigin: true,
-      },
-    },
   },
+  // No proxy needed — Vite runs as Express middleware in dev
 });
 ```
 
-The Vite proxy means the frontend dev server forwards `/api/*` to the backend, avoiding CORS issues in dev and keeping `VITE_API_BASE_URL` optional in dev.
+### `client/src/index.css` — design tokens
 
-### MUI theme (`frontend/src/theme.js`)
-```javascript
-import { createTheme } from '@mui/material/styles';
+```css
+:root {
+  /* Font sizes */
+  --fs-primary: 1rem;
+  --fs-secondary: 0.875rem;
+  --fs-small: 0.75rem;
+
+  /* Spacing (supplement MUI's spacing system for custom components) */
+  --sp-page: 16px;
+}
+
+[data-theme="dark"] {
+  /* Override custom CSS vars for dark mode here.
+     MUI component colors are handled by ThemeProvider — only extend here
+     for custom CSS properties that MUI does not manage. */
+}
+```
+
+### `client/src/theme.ts` — MUI theme
+
+```typescript
+import { createTheme } from "@mui/material/styles";
 
 const theme = createTheme({
   palette: {
-    mode: 'light',  // or 'dark' — choose at project start
-    primary: { main: '#2e7d32' },    // green — home/nature feel
-    secondary: { main: '#ff8f00' },  // amber
+    mode: "light",
+    primary: { main: "#2e7d32" },    // green — home/nature
+    secondary: { main: "#ff8f00" },  // amber
   },
   typography: {
-    fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
+    fontFamily: "\"Inter\", \"Roboto\", \"Helvetica\", \"Arial\", sans-serif",
+  },
+  components: {
+    MuiBottomNavigation: { styleOverrides: { root: { borderTop: "1px solid rgba(0,0,0,0.12)" } } },
   },
 });
 
 export default theme;
 ```
 
-### React Router layout (`frontend/src/App.jsx`)
-```javascript
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { ThemeProvider, CssBaseline } from '@mui/material';
-import theme from './theme';
-import AppShell from './components/layout/AppShell';
-import AuthGuard from './components/layout/AuthGuard';
-import LoginPage from './pages/Auth/LoginPage';
-import PantryPage from './pages/Pantry/PantryPage';
-// ... other page imports
+**Mobile-first navigation:** use MUI `BottomNavigation` for the primary nav on mobile. The `AppShell` component switches to a sidebar drawer on `md` and above.
 
-export default function App() {
-  return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
-      <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route element={<AuthGuard><AppShell /></AuthGuard>}>
-            <Route path="/" element={<Navigate to="/pantry" replace />} />
-            <Route path="/pantry/*" element={<PantryPage />} />
-            {/* add modules here */}
-          </Route>
-        </Routes>
-      </BrowserRouter>
-    </ThemeProvider>
-  );
+### `client/src/store/themeStore.ts` — dark mode (Zustand)
+
+```typescript
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+
+interface ThemeStore {
+  dark: boolean;
+  toggle: () => void;
 }
-```
 
-### API client (`frontend/src/api/client.js`)
-```javascript
-import axios from 'axios';
-
-const client = axios.create({
-  baseURL: '/api',   // Vite proxy in dev; nginx proxy in prod
-  withCredentials: true,  // required for cookie-based auth
-  timeout: 30000,
-});
-
-// Response interceptor — unwrap envelope or throw
-client.interceptors.response.use(
-  (res) => res.data.data,   // unwrap { success: true, data: ... }
-  (err) => {
-    if (err.response?.status === 401) {
-      window.location.href = '/login';
-    }
-    return Promise.reject(err.response?.data?.error || err);
-  }
+export const useThemeStore = create<ThemeStore>()(
+  persist(
+    (set) => ({
+      dark: false,
+      toggle: () => set((s) => {
+        const next = !s.dark;
+        document.documentElement.setAttribute("data-theme", next ? "dark" : "light");
+        return { dark: next };
+      }),
+    }),
+    { name: "oikos-theme" },
+  ),
 );
-
-export default client;
 ```
 
-### Auth guard component
+On app init (`App.tsx`), read `dark` from the store and set `data-theme` on `document.documentElement` to restore the saved preference.
 
-`frontend/src/components/layout/AuthGuard.jsx`:
-- On mount, call `GET /api/auth/me`.
-- If `200` → render children.
-- If `401` → redirect to `/login`.
-- While loading → show `<CircularProgress />` centered.
+### Required packages
 
-Store auth state in React context or Zustand — do not re-fetch on every render.
-
-### Required npm packages (frontend)
+**`server/package.json` dependencies:**
 ```
-react react-dom
-@vitejs/plugin-react vite
-@mui/material @mui/icons-material @emotion/react @emotion/styled
-react-router-dom
-axios
+express, cors, helmet, jsonwebtoken, multer, zod, @prisma/client, @oikos/shared
 ```
+**Dev:** `prisma, tsx, nodemon, typescript, @types/express, @types/cors, @types/jsonwebtoken, @types/multer, @types/node`
+
+**`client/package.json` dependencies:**
+```
+react, react-dom, @mui/material, @mui/icons-material, @emotion/react, @emotion/styled,
+react-router-dom, axios, zustand, @oikos/shared
+```
+**Dev:** `vite, @vitejs/plugin-react, typescript, @types/react, @types/react-dom`
 
 ---
 
-## 7. Dev Workflow
+## 8. Dev Workflow
 
 ### First-time setup
 ```bash
-# 1. Copy env file
 cp .env.example .env
-# Edit .env — set APP_PASSWORD, SESSION_SECRET, POSTGRES_PASSWORD
+# Edit .env: set APP_PASSWORD, JWT_SECRET, POSTGRES_PASSWORD
 
-# 2. Start all services
-docker compose --profile dev up --build
-
-# 3. Run migrations (from inside the backend container or locally with node)
-docker compose exec backend npm run migrate
+docker compose up --build
 ```
+
+On first start, the Dockerfile runs `prisma db push` — this creates the database tables from `schema.prisma`. No separate migration step needed in Phase 0 (the schema is empty). As modules are added, run `npm run db:migrate --workspace=server` to create versioned migrations.
 
 ### Daily development
 ```bash
-docker compose --profile dev up
+docker compose up
+# App: http://localhost:3001
+# PostgreSQL: localhost:5432 (connect with any Postgres client)
 ```
-- Backend: `http://localhost:3001` — nodemon watches `backend/src/`
-- Frontend: `http://localhost:5173` — Vite HMR
-- PostgreSQL: `localhost:5432` (exposed in dev profile)
 
-### Adding a migration
+### After any schema change
 ```bash
-docker compose exec backend npm run migrate:create -- --name add-pantry-tables
-# Edit the generated file in backend/src/db/migrations/
-docker compose exec backend npm run migrate
+# Inside container or via exec:
+docker compose exec server npm run db:push --workspace=server
+# Then always:
+docker compose restart server
 ```
 
-### Running migrations down
-```bash
-docker compose exec backend npm run migrate:down
-```
-
-### Connecting to the DB directly
+### Connect to DB
 ```bash
 docker compose exec db psql -U oikos -d oikos
-```
-
-### Stopping everything
-```bash
-docker compose down
-# To also remove volumes (destructive — deletes DB data):
-docker compose down -v
 ```
 
 ---
 
 ## Assumptions
 
-- The `claude` CLI binary is available inside the Docker container (installed during image build or bind-mounted from the host). If bind-mounted, `CLAUDE_BIN` in the backend env must point to the host path. This is a hard dependency for any AI feature.
-- HTTPS is not required for Phase 0 local development. Barcode scanning (which requires HTTPS) is a Phase 1 concern.
-- `cookie-session` stores session data in the cookie itself. If the session data grows large (it should not — only `{ authenticated: true }` is stored), switch to a server-side store. Not a Phase 0 concern.
-- Node.js LTS version is 22 at time of writing. Pin the Docker base image to `node:22-alpine`.
+- The `claude` CLI binary must be available inside the server container. Either install it in the Dockerfile or bind-mount it from the host. `CLAUDE_BIN` env var should point to its path. Any AI feature fails without it — this is a hard dependency.
+- HTTPS is not required for Phase 0. Barcode scanning (which needs HTTPS on non-localhost devices) is a Phase 1 concern. See `docs/architecture.md §8`.
+- JWT tokens are in-memory only on the client (not persisted). A page refresh requires re-login. This is acceptable for a personal home server app — the login screen is lightweight.
+- Node.js 22 LTS is pinned in the Dockerfile. Do not use 25.x — it is not LTS and introduces breaking changes in some npm workspace resolution edge cases.

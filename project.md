@@ -1,47 +1,54 @@
-# Project Brief
+# Project Brief — Oikos
+
+The Mind reads this file at the start of every session. Keep it non-technical and high-level — the "what and why." Technical decisions belong in `mind/decisions.md`; implementation details belong in `docs/architecture.md`.
 
 ---
 
 ## What we're building
 
-**Oikos** — a home & life management server application with a web frontend. It covers:
+Oikos is a personal home management server with a web frontend. It consolidates eight areas of household life into one self-hosted application:
 
-1. **Pantry Manager** — barcode scanning, expiration date tracking
-2. **Recipe Manager** — image import with text/ingredient extraction, translation, ratings (easiness, taste), prep/cook/work time, categories (fish, pork, beef, chicken, vegan, pasta, rice, potato, stew, etc.), calorie filter
-3. **Finance Manager** — credit calculation, investment tracking, Bausparvertrag/Giro/savings account growth, import of current state and expenses, automatic recognition of new entries, export for Claude analysis, planned spendings tracking (mattresses, bike, furniture, bedroom lights, jalousines, money collection album, etc.)
-4. **Financing Manager** — managing larger purchase financing projects
-5. **Shopping List Creator** — automatic generation based on pantry state
-6. **Spending Analysis & Savings Suggestions** — calculation of spending/earnings, AI-driven suggestions on where to cut
-7. **Investment Management** — suggestions and tracking
-8. **Plant & Gardening Manager** — watering cycles (temperature/humidity/season-aware), fertilization tracker, plant import with data, harvest/planting scheduling, gardening specialist AI
+1. **Pantry tracker** — track what's in the house, quantities, and expiry dates
+2. **Recipe manager** — store, organise, and rate recipes; extract from photos
+3. **Finance manager** — track accounts, import bank statements, plan spending
+4. **Financing manager** — track large purchases on installment/credit plans
+5. **Shopping list** — auto-generated from pantry state, plus manual additions
+6. **Spending analysis** — categorised expense summaries and savings suggestions
+7. **Investment management** — track ETFs, Bausparvertrag, savings goals
+8. **Plant & gardening manager** — care schedules, watering, fertilisation, AI gardening specialist
 
-## Target audience
+AI features (savings suggestions, recipe OCR, gardening chat) run via the `claude -p` CLI — no Anthropic SDK in the app.
 
-Personal use — single household. Alex (the user). German-language context (e.g. Bausparvertrag, Fliegengitter, Jalousinen).
+## Who it's for
 
-## Tech stack
+Single user: Alex. Personal home server on a local network. No multi-user support planned for v1.
 
-Not yet decided. To be determined by Tech Specialist assessment.
+## Goals
+
+- One place for household inventory, finances, and plant care — currently spread across notes, spreadsheets, and memory
+- Reduce food waste through expiry tracking
+- Understand and improve personal spending patterns
+- Automate the tedious parts (shopping list generation, bank import deduplication, recipe extraction from photos)
 
 ## Key constraints
 
-- Server application with web frontend
-- Should integrate with Claude API for analysis and suggestions (finance export, gardening specialist)
-- Barcode scanning support needed
-- Recipe image OCR and translation needed
-- Planning phase only — no implementation yet
+- Self-hosted on a home server — must run via Docker Compose, no cloud dependencies
+- Single developer (Alex) building and maintaining it — keep complexity proportional
+- AI features use `claude -p` CLI subprocess, not a managed API integration
+- No live bank connection — finance import is file-based only
 
-## Decisions already made
+## Out of scope (v1)
 
-- Product name: Oikos
-- It is a server app + web frontend (not a mobile-only app)
-- Claude is invoked via `claude -p` CLI subprocess — no Anthropic SDK, no API key in-app
-- Finance import is file-based only — no live bank connection. Importer must deduplicate entries automatically
-- Sample bank export file to be provided by user before finance importer is built
-- Tech stack: Node.js + Express backend, React + Vite frontend, PostgreSQL database
+- Multi-user accounts
+- Mobile native app (web app served by the backend, mobile-first responsive design)
+- Barcode scanning (manual pantry entry in v1; barcode scanning is an optional enhancement pending OQ-3)
+- Live bank/investment sync
+- Push notifications
 
-## Background context
+## References
 
-- Finance: user has Bausparvertrag, Giro account, savings account
-- Planned large purchases: mattresses, Fliegengitter am Balkon, bike, furniture under stairs, bedroom lights, jalousines upstairs, money collection album
-- Plant tracker should support "gardening specialist" AI agent fed by plant data
+- Tech stack and architectural decisions: `mind/decisions.md`
+- System architecture and folder structure: `docs/architecture.md`
+- Module implementation specs: `docs/specs/`
+- Phase-by-phase build plan: `mind/roadmap.md`
+- Deferred decisions: `mind/open-questions.md`

@@ -26,11 +26,12 @@ _First feature module. No dependencies on other modules._
 
 - [ ] Product data model (name, barcode, category, nutritional info, source)
 - [ ] Pantry item data model (product, quantity, unit, expiry date, location)
-- [ ] Open Food Facts integration (barcode → product lookup with fallback to manual)
-- [ ] In-browser barcode scanner (ZXing-WASM or zbar-wasm via camera)
 - [ ] Pantry CRUD API (add, update, remove, list)
+- [ ] Manual item entry: name, size/unit (e.g. 200g, 500ml, 1 small jar), quantity, expiry date, location
 - [ ] Expiry date tracking + warning logic (configurable threshold)
-- [ ] Pantry UI (list view, scan button, expiry highlights, manual entry form)
+- [ ] Pantry UI (list view, expiry highlights, manual entry form)
+- [ ] _(optional, v1+)_ Open Food Facts integration (barcode → product lookup) — depends on OQ-3 (HTTPS)
+- [ ] _(optional, v1+)_ In-browser barcode scanner (ZXing-WASM via camera) — depends on OQ-3 (HTTPS)
 
 ---
 

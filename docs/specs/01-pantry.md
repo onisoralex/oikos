@@ -9,7 +9,11 @@
 
 ## Overview
 
-The Pantry module tracks food items in the household. A `product` is the catalogue entry (what the thing is — name, brand, nutrition info). A `pantry_item` is a specific instance of that product in the pantry (how many, where, when it expires). Products are resolved by barcode scan against Open Food Facts; missing products fall back to manual entry.
+The Pantry module tracks food items in the household. A `product` is the catalogue entry (what the thing is — name, brand, nutrition info). A `pantry_item` is a specific instance of that product in the pantry (how many, where, when it expires).
+
+**v1 scope:** Manual entry only. The user enters name, size/unit (e.g. 200g, 500ml, 1 small jar), quantity, expiry date, and location directly. No barcode scanning in v1.
+
+**Optional enhancement (v1+):** Barcode scanning via camera + Open Food Facts lookup. Blocked on OQ-3 (HTTPS strategy) — `getUserMedia` requires HTTPS on non-localhost devices. Implement only after OQ-3 is resolved. The data model already supports it (`barcode`, `source`, `off_id` fields on `Product`) so no schema changes will be needed when the time comes.
 
 ---
 

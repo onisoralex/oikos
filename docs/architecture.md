@@ -2,7 +2,6 @@
 
 **Status:** Living document — update as decisions are made.
 **Last updated:** 2026-05-13
-**Produced by:** Tech Specialist (task: oikos-architecture-specs-20260513-000001)
 
 ---
 
@@ -12,21 +11,23 @@ All stack decisions are confirmed. Do not re-open.
 
 | Layer | Technology | Notes |
 |---|---|---|
-| Backend runtime | Node.js (LTS) | |
-| Backend framework | Express | |
-| Frontend framework | React + Vite | |
-| Frontend UI library | Material UI (MUI v6+) | |
+| Language | TypeScript (strict) | Server and client. `"module": "NodeNext"` on server. |
+| Backend framework | Express | Single process serves both API and frontend. |
+| Frontend | React + Vite | Vite runs as Express middleware (`middlewareMode: true`). No separate frontend container. |
+| UI library | Material UI (MUI v6+) + Material Icons | Mobile-first. |
+| State management | Zustand | Client-side. Persisted stores for auth, theme, and module-level UI state. |
+| Real-time (optional) | Socket.io | Added when a module requires push updates (e.g. live shopping list sync, gardening alerts). Not included in Phase 0 — add when first needed. |
 | Database | PostgreSQL 16 | |
-| Containerisation | Docker Compose | Single file, all services |
-| Backend dev HMR | nodemon | Restarts Express on file save |
-| Frontend dev HMR | Vite HMR | Native |
-| AI invocation | `claude -p` via Node.js `exec` | No Anthropic SDK; three tiers (see §7) |
-| Translation | `claude -p` with Haiku model | Single-turn; called per-text |
-| Recipe OCR | Claude vision via `claude -p` | Image path or base64 passed as argument |
-| Barcode scan | ZXing-WASM | In-browser, camera via `getUserMedia` |
-| Product data | Open Food Facts API | No key required; rate limit 15 req/min |
-| Plant data | Perenual API (free tier) | Cache locally; 100 req/day limit |
-| Bank import | File-based only | MT940 / CAMT.053 / CSV; format TBD from sample |
+| ORM / migrations | Prisma | `prisma migrate dev` in dev, `prisma migrate deploy` in prod. |
+| Containerisation | Docker Compose | Single `server` service + `db` service. |
+| Dev HMR | `nodemon --legacy-watch` + `tsx` | `--legacy-watch` required on Windows Docker bind mounts (inotify not available). |
+| AI invocation | `claude -p` via Node.js `exec` | No Anthropic SDK. Three tiers — see §7. |
+| Translation | `claude -p` with Haiku model | Single-turn. |
+| Recipe OCR | Claude vision via `claude -p` | Image path passed as argument. |
+| Barcode scan | ZXing-WASM | In-browser, camera via `getUserMedia`. Requires HTTPS — see §8. |
+| Product data | Open Food Facts API | No key required. Rate limit: 15 req/min. |
+| Plant data | Perenual API (free tier) | Cache locally. 100 req/day limit. |
+| Bank import | File-based only | MT940 / CAMT.053 / CSV. Format TBD from sample file. |
 
 ---
 
@@ -34,152 +35,135 @@ All stack decisions are confirmed. Do not re-open.
 
 ```
 oikos/                              ← repo root
-├── backend/
+├── server/
 │   ├── src/
-│   │   ├── app.js                  ← Express app factory (no listen here)
-│   │   ├── server.js               ← entry point — binds port, starts app
-│   │   ├── config.js               ← env var loading + validation (dotenv)
+│   │   ├── index.ts                ← entry point — starts Express + Vite middleware
+│   │   ├── app.ts                  ← Express app factory
+│   │   ├── config.ts               ← env var loading + validation
 │   │   ├── db/
-│   │   │   ├── pool.js             ← pg connection pool (node-postgres)
-│   │   │   └── migrations/         ← node-pg-migrate migration files
-│   │   │       └── 001_initial.js
+│   │   │   └── client.ts           ← Prisma client singleton (export { prisma })
 │   │   ├── middleware/
-│   │   │   ├── auth.js             ← session validation guard
-│   │   │   ├── errorHandler.js     ← global Express error handler
-│   │   │   └── requestLogger.js    ← Morgan or custom logger
+│   │   │   ├── auth.ts             ← JWT validation guard
+│   │   │   └── errorHandler.ts     ← global Express error handler
 │   │   ├── services/
-│   │   │   └── claude.js           ← Claude CLI wrapper (all AI calls go here)
+│   │   │   └── claude.ts           ← Claude CLI wrapper (all AI calls go here)
 │   │   └── modules/
+│   │       ├── auth/
+│   │       │   └── auth.routes.ts
 │   │       ├── pantry/
-│   │       │   ├── pantry.routes.js
-│   │       │   ├── pantry.controller.js
-│   │       │   ├── pantry.service.js
-│   │       │   └── pantry.model.js
+│   │       │   ├── pantry.routes.ts
+│   │       │   ├── pantry.controller.ts
+│   │       │   └── pantry.service.ts
 │   │       ├── recipes/
-│   │       │   ├── recipes.routes.js
-│   │       │   ├── recipes.controller.js
-│   │       │   ├── recipes.service.js
-│   │       │   └── recipes.model.js
+│   │       │   ├── recipes.routes.ts
+│   │       │   ├── recipes.controller.ts
+│   │       │   └── recipes.service.ts
 │   │       ├── finance/
-│   │       │   ├── finance.routes.js
-│   │       │   ├── finance.controller.js
-│   │       │   ├── finance.service.js
-│   │       │   ├── finance.model.js
+│   │       │   ├── finance.routes.ts
+│   │       │   ├── finance.controller.ts
+│   │       │   ├── finance.service.ts
 │   │       │   └── importers/
-│   │       │       ├── csv.importer.js
-│   │       │       ├── mt940.importer.js
-│   │       │       └── camt053.importer.js
+│   │       │       ├── csv.importer.ts
+│   │       │       ├── mt940.importer.ts
+│   │       │       └── camt053.importer.ts
 │   │       ├── financing/
-│   │       │   ├── financing.routes.js
-│   │       │   ├── financing.controller.js
-│   │       │   ├── financing.service.js
-│   │       │   └── financing.model.js
 │   │       ├── shopping/
-│   │       │   ├── shopping.routes.js
-│   │       │   ├── shopping.controller.js
-│   │       │   ├── shopping.service.js
-│   │       │   └── shopping.model.js
 │   │       ├── spending/
-│   │       │   ├── spending.routes.js
-│   │       │   ├── spending.controller.js
-│   │       │   └── spending.service.js
 │   │       ├── investments/
-│   │       │   ├── investments.routes.js
-│   │       │   ├── investments.controller.js
-│   │       │   ├── investments.service.js
-│   │       │   └── investments.model.js
 │   │       └── plants/
-│   │           ├── plants.routes.js
-│   │           ├── plants.controller.js
-│   │           ├── plants.service.js
-│   │           └── plants.model.js
+│   ├── prisma/
+│   │   ├── schema.prisma           ← single schema file, all models
+│   │   └── seed.ts                 ← optional seed data
+│   ├── uploads/                    ← bind-mounted; recipe images, bank files, plant photos
 │   ├── package.json
-│   ├── package-lock.json
-│   ├── .env.example
-│   └── nodemon.json
-├── frontend/
+│   ├── tsconfig.json
+│   ├── nodemon.json
+│   └── Dockerfile.dev
+├── client/
 │   ├── src/
-│   │   ├── main.jsx                ← Vite entry point
-│   │   ├── App.jsx                 ← root component + React Router
-│   │   ├── theme.js                ← MUI theme definition
+│   │   ├── main.tsx                ← Vite entry point
+│   │   ├── App.tsx                 ← root component + React Router
+│   │   ├── index.css               ← CSS custom properties (design tokens + dark mode block)
+│   │   ├── theme.ts                ← MUI theme definition
 │   │   ├── api/
-│   │   │   └── client.js           ← axios instance with base URL + auth header
+│   │   │   └── client.ts           ← axios instance (base URL + auth header)
+│   │   ├── store/
+│   │   │   ├── authStore.ts        ← Zustand auth state (JWT token)
+│   │   │   └── themeStore.ts       ← Zustand dark mode (persisted to localStorage)
 │   │   ├── components/
 │   │   │   ├── layout/
-│   │   │   │   ├── AppShell.jsx    ← sidebar + topbar wrapper
-│   │   │   │   └── NavMenu.jsx
+│   │   │   │   ├── AppShell.tsx    ← sidebar/bottom nav + page outlet
+│   │   │   │   └── AuthGuard.tsx
 │   │   │   └── common/
-│   │   │       ├── LoadingSpinner.jsx
-│   │   │       ├── ErrorAlert.jsx
-│   │   │       └── ConfirmDialog.jsx
+│   │   │       ├── LoadingSpinner.tsx
+│   │   │       └── ErrorAlert.tsx
 │   │   ├── hooks/
-│   │   │   ├── useAuth.js
-│   │   │   └── useApi.js           ← generic data-fetching hook
+│   │   │   └── useApi.ts
 │   │   ├── pages/
 │   │   │   ├── Auth/
-│   │   │   │   └── LoginPage.jsx
+│   │   │   │   └── LoginPage.tsx
 │   │   │   ├── Pantry/
-│   │   │   │   ├── PantryPage.jsx
-│   │   │   │   ├── ScanPage.jsx
-│   │   │   │   └── AddItemForm.jsx
+│   │   │   │   ├── PantryPage.tsx
+│   │   │   │   ├── ScanPage.tsx
+│   │   │   │   └── AddItemForm.tsx
 │   │   │   ├── Recipes/
 │   │   │   ├── Finance/
 │   │   │   ├── Shopping/
 │   │   │   ├── Spending/
 │   │   │   ├── Investments/
 │   │   │   └── Plants/
-│   │   └── services/               ← one file per module, wraps api/client.js
-│   │       ├── pantry.service.js
-│   │       ├── recipes.service.js
-│   │       ├── finance.service.js
-│   │       └── plants.service.js
+│   │   └── services/               ← one file per module, wraps api/client.ts
+│   │       ├── pantry.service.ts
+│   │       └── ...
 │   ├── index.html
-│   ├── vite.config.js
-│   ├── package.json
-│   └── package-lock.json
-├── docker-compose.yml              ← all services (dev + prod profiles)
-├── docker-compose.override.yml     ← optional local overrides (gitignored)
-├── .env.example                    ← shared env var template
+│   ├── vite.config.ts
+│   └── package.json
+├── packages/
+│   └── shared/
+│       ├── src/
+│       │   └── index.ts            ← shared TypeScript types and Zod schemas
+│       └── package.json
+├── docker-compose.yaml
+├── package.json                    ← npm workspaces root (server, client, packages/*)
+├── .env.example
 └── docs/                           ← this document lives here
     ├── architecture.md
     └── specs/
-        ├── 00-foundation.md
-        ├── 01-pantry.md
-        └── ...
 ```
 
 **Key conventions:**
-- Every module under `backend/src/modules/` has exactly four files: `routes`, `controller`, `service`, `model`. Routes register Express endpoints. Controllers validate request/response. Services hold business logic. Models hold SQL queries (no ORM — raw `pg` queries via the pool).
-- Frontend `services/` files are thin wrappers over `api/client.js` — they know the endpoint URLs and shape the request/response objects, nothing more.
-- No shared `types/` folder — this is a JavaScript project. Document schemas in specs and enforce via JS validation in the service layer.
+- No `model.ts` files. Prisma client replaces them — all DB access goes through `prisma` in service files.
+- Every module has exactly three files: `routes`, `controller`, `service`. Routes register endpoints. Controllers validate request/response. Services hold business logic and DB calls.
+- `packages/shared/src/index.ts` is the only place shared types live. Server and client import from `@oikos/shared`. Never duplicate type definitions.
+- Arrow functions throughout. Double quotes in all TS/TSX files.
 
 ---
 
 ## 3. Module Map
 
 ### Pantry Manager
-Tracks food items in the home. Stores products (sourced from Open Food Facts or manual entry) and pantry items (a product + quantity + expiry + location). Exposes `/api/v1/pantry/`. Key tables: `products`, `pantry_items`. No hard dependencies on other modules, but Shopping List reads pantry state.
+Tracks food items in the home. Products (catalogue entries) resolved via barcode → Open Food Facts, falling back to manual entry. Pantry items are instances of a product with quantity + expiry + location. Exposes `/api/v1/pantry/`. Key Prisma models: `Product`, `PantryItem`. No hard module dependencies; Shopping List reads pantry state.
 
 ### Recipe Manager
-Stores recipes with ingredients, preparation steps, cook times, category tags, and user ratings. Supports image upload for OCR extraction (via Claude vision) and optional translation (via Claude Haiku). Exposes `/api/v1/recipes/`. Key tables: `recipes`, `recipe_ingredients`, `recipe_ratings`. No dependency on other modules.
+Stores recipes with ingredients, steps, times, categories, and ratings. Photo upload → Claude vision extracts structured recipe data. Optional translation via Claude Haiku. Exposes `/api/v1/recipes/`. Key models: `Recipe`, `RecipeIngredient`, `RecipeRating`.
 
 ### Finance Manager
-Core financial module. Tracks accounts (Giro, Sparkonto, Bausparvertrag, investment) and transactions. Imports bank export files (MT940/CAMT.053/CSV), deduplicates automatically, and exports data for Claude analysis. Exposes `/api/v1/finance/`. Key tables: `accounts`, `transactions`, `planned_spendings`. Spending Analysis and Financing Manager depend on this module's schema.
+Core financial module. Accounts (Giro, Sparkonto, Bausparvertrag, investment) and transactions. File-based import (MT940/CAMT.053/CSV) with automatic deduplication. Exports data for Claude analysis. Exposes `/api/v1/finance/`. Key models: `Account`, `Transaction`, `PlannedSpending`. Spending Analysis and Financing Manager depend on this.
 
 ### Financing Manager
-Tracks large purchase financing projects (e.g. mattress on installment, credit). Each project has a total amount, financing terms, payment schedule, and link to associated transactions in Finance. Exposes `/api/v1/financing/`. Key table: `financing_projects`. Depends on Finance Manager for transaction data.
+Large purchase financing tracking (installment plans, credit). Links to transactions in Finance. Exposes `/api/v1/financing/`. Key model: `FinancingProject`.
 
 ### Shopping List Creator
-Generates shopping lists from pantry low-stock or absent items plus manual additions. Read-only access to `pantry_items`. Exposes `/api/v1/shopping/`. Key table: `shopping_lists`, `shopping_items`. Depends on Pantry Manager.
+Auto-generates lists from pantry low-stock items plus manual additions. Read-only on pantry data. Exposes `/api/v1/shopping/`. Key models: `ShoppingList`, `ShoppingItem`.
 
 ### Spending Analysis
-Reads categorized transactions from Finance Manager and produces aggregated summaries (by category, by month, by account). Triggers Claude CLI for savings suggestions. No dedicated tables — operates on Finance data. Exposes `/api/v1/spending/`. Depends on Finance Manager.
+Aggregates categorized transactions from Finance. Triggers Claude for savings suggestions. No dedicated models — operates on Finance data. Exposes `/api/v1/spending/`.
 
 ### Investment Management
-Tracks investment holdings — ETFs, Bausparvertrag, savings goals. Manual entry and periodic balance updates. Exposes `/api/v1/investments/`. Key tables: `investment_accounts`, `investment_holdings`. Scope limited to tracking + display; no live price feed in Phase 5.
+Tracks holdings (ETFs, Bausparvertrag, savings goals) via manual entry and periodic balance snapshots. No live price feed. Exposes `/api/v1/investments/`. Key models: `InvestmentAccount`, `InvestmentSnapshot`.
 
 ### Plant & Gardening Manager
-Stores plants (species, location, acquired date) with care schedules (watering interval, last watered, fertilization schedule). Integrates with Perenual API for species data (cached locally). Exposes `/api/v1/plants/`. Key tables: `plants`, `plant_species_cache`, `care_events`. The Gardening Specialist AI is a Claude session (`--session-id`) fed with current plant data as context.
+Plants with care schedules. Perenual API for species data (cached in DB). Claude session for gardening specialist chat. Exposes `/api/v1/plants/`. Key models: `Plant`, `PlantSpeciesCache`, `CareEvent`.
 
 ---
 
@@ -189,19 +173,15 @@ Stores plants (species, location, acquired date) with care schedules (watering i
 ```
 /api/v1/<module>/
 ```
-Examples: `/api/v1/pantry/items`, `/api/v1/finance/accounts`, `/api/v1/plants/`.
 
 ### Authentication
-Every request to `/api/v1/*` requires the session cookie (set on login). The `auth.js` middleware checks the cookie signature and rejects unsigned or expired sessions with `401`. The login endpoint at `/api/auth/login` is unguarded.
+JWT in `Authorization: Bearer <token>` header. Token issued on login, stored in `authStore` (Zustand, in-memory only — not persisted to localStorage for security). The `auth.ts` middleware validates the token on all `/api/v1/*` routes. `/api/auth/*` and `/api/health` are unguarded.
 
 ### Response Envelope
 
 **Success:**
 ```json
-{
-  "success": true,
-  "data": { ... }
-}
+{ "success": true, "data": { ... } }
 ```
 
 **Success with pagination:**
@@ -209,12 +189,7 @@ Every request to `/api/v1/*` requires the session cookie (set on login). The `au
 {
   "success": true,
   "data": [ ... ],
-  "pagination": {
-    "page": 1,
-    "pageSize": 25,
-    "total": 143,
-    "totalPages": 6
-  }
+  "pagination": { "page": 1, "pageSize": 25, "total": 143, "totalPages": 6 }
 }
 ```
 
@@ -222,177 +197,39 @@ Every request to `/api/v1/*` requires the session cookie (set on login). The `au
 ```json
 {
   "success": false,
-  "error": {
-    "code": "PRODUCT_NOT_FOUND",
-    "message": "No product found for barcode 4000521001596",
-    "details": null
-  }
+  "error": { "code": "PRODUCT_NOT_FOUND", "message": "...", "details": null }
 }
 ```
 
-HTTP status codes are meaningful — use them correctly. `200` OK, `201` Created, `400` Bad Request (validation), `401` Unauthorized, `404` Not Found, `409` Conflict (duplicate), `422` Unprocessable (business rule violation), `500` Internal Error.
+HTTP status codes are meaningful. `200` OK, `201` Created, `400` Bad Request, `401` Unauthorized, `404` Not Found, `409` Conflict, `422` Unprocessable, `500` Internal.
 
 ### Pagination
-All list endpoints accept query params `page` (default 1) and `pageSize` (default 25, max 100). Always return the `pagination` object even on the first page. Example: `GET /api/v1/pantry/items?page=2&pageSize=50`.
+List endpoints accept `page` (default 1) and `pageSize` (default 25, max 100).
 
 ### File Uploads
-Files are uploaded via `multipart/form-data` POST. Use `multer` middleware on the backend. Files are stored in a local `uploads/` volume (bind-mounted in Docker). The field name convention is `file` for generic uploads; `image` for image-specific uploads (OCR, plant photos). Maximum file size: 20 MB.
+`multipart/form-data` via `multer`. Files stored in `server/uploads/` (bind-mounted volume). Field name: `file` for generic uploads, `image` for images. Max 20 MB.
 
 ---
 
-## 5. Database Overview
+## 5. Database — Prisma Models
 
-All tables use `id SERIAL PRIMARY KEY` unless otherwise noted. Timestamps are stored as `TIMESTAMPTZ`.
+All models in `server/prisma/schema.prisma`. Key models per module listed below. Full schema lives in the file — do not duplicate it here.
 
-### Pantry Module
+| Module | Models |
+|---|---|
+| Pantry | `Product`, `PantryItem` |
+| Recipes | `Recipe`, `RecipeIngredient`, `RecipeRating` |
+| Finance | `Account`, `Transaction`, `PlannedSpending` |
+| Financing | `FinancingProject` |
+| Shopping | `ShoppingList`, `ShoppingItem` |
+| Investments | `InvestmentAccount`, `InvestmentSnapshot` |
+| Plants | `Plant`, `PlantSpeciesCache`, `CareEvent` |
 
-**`products`**
-```
-id, barcode VARCHAR(30) UNIQUE, name TEXT NOT NULL, brand TEXT,
-category TEXT, nutritional_info JSONB, image_url TEXT,
-source VARCHAR(10) CHECK (source IN ('off','manual')), off_id TEXT,
-created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
-```
-
-**`pantry_items`**
-```
-id, product_id INT REFERENCES products(id) ON DELETE RESTRICT,
-quantity NUMERIC NOT NULL, unit VARCHAR(20), expiry_date DATE,
-location TEXT, notes TEXT, added_at TIMESTAMPTZ DEFAULT NOW(),
-updated_at TIMESTAMPTZ
-```
-
-### Recipe Module
-
-**`recipes`**
-```
-id, title TEXT NOT NULL, title_original TEXT, source TEXT,
-prep_time_min INT, cook_time_min INT, total_time_min INT,
-servings INT, calories_per_serving INT, categories TEXT[],
-image_url TEXT, notes TEXT, language VARCHAR(10),
-created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
-```
-
-**`recipe_ingredients`**
-```
-id, recipe_id INT REFERENCES recipes(id) ON DELETE CASCADE,
-sort_order INT, quantity NUMERIC, unit VARCHAR(30), name TEXT NOT NULL,
-notes TEXT
-```
-
-**`recipe_ratings`**
-```
-id, recipe_id INT REFERENCES recipes(id) ON DELETE CASCADE,
-rated_at TIMESTAMPTZ DEFAULT NOW(), easiness SMALLINT CHECK (1..5),
-taste SMALLINT CHECK (1..5), notes TEXT
-```
-
-### Finance Module
-
-**`accounts`**
-```
-id, name TEXT NOT NULL, type VARCHAR(20) CHECK (type IN
-  ('giro','savings','bauspar','investment','credit')),
-currency VARCHAR(3) DEFAULT 'EUR', balance NUMERIC(15,2),
-institution TEXT, iban VARCHAR(34), notes TEXT,
-created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
-```
-
-**`transactions`**
-```
-id, account_id INT REFERENCES accounts(id) ON DELETE RESTRICT,
-date DATE NOT NULL, amount NUMERIC(15,2) NOT NULL,
-description TEXT, category TEXT, raw_description TEXT,
-raw_hash VARCHAR(64) UNIQUE, -- SHA-256 of (account_id + date + amount + raw_description) for dedup
-import_source TEXT, manually_entered BOOLEAN DEFAULT FALSE,
-created_at TIMESTAMPTZ
-```
-
-**`planned_spendings`**
-```
-id, name TEXT NOT NULL, estimated_amount NUMERIC(15,2),
-target_date DATE, priority SMALLINT, status VARCHAR(20)
-CHECK (status IN ('planned','saved','purchased','cancelled')),
-notes TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
-```
-
-### Financing Module
-
-**`financing_projects`**
-```
-id, name TEXT NOT NULL, total_amount NUMERIC(15,2), down_payment NUMERIC(15,2),
-financed_amount NUMERIC(15,2), interest_rate NUMERIC(6,4), term_months INT,
-monthly_payment NUMERIC(15,2), start_date DATE, status VARCHAR(20)
-CHECK (status IN ('active','paid_off','cancelled')),
-account_id INT REFERENCES accounts(id), notes TEXT,
-created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
-```
-
-### Shopping Module
-
-**`shopping_lists`**
-```
-id, name TEXT, is_active BOOLEAN DEFAULT TRUE,
-created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
-```
-
-**`shopping_items`**
-```
-id, list_id INT REFERENCES shopping_lists(id) ON DELETE CASCADE,
-name TEXT NOT NULL, quantity NUMERIC, unit VARCHAR(20),
-checked BOOLEAN DEFAULT FALSE, product_id INT REFERENCES products(id),
-sort_order INT, created_at TIMESTAMPTZ
-```
-
-### Investment Module
-
-**`investment_accounts`**
-```
-id, name TEXT NOT NULL, type VARCHAR(20) CHECK (type IN
-  ('etf','stock','bauspar','savings_bond','other')),
-institution TEXT, currency VARCHAR(3) DEFAULT 'EUR',
-notes TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
-```
-
-**`investment_snapshots`**
-```
-id, investment_account_id INT REFERENCES investment_accounts(id) ON DELETE CASCADE,
-snapshot_date DATE NOT NULL, balance NUMERIC(15,2) NOT NULL,
-units NUMERIC(18,6), unit_price NUMERIC(15,4), notes TEXT,
-created_at TIMESTAMPTZ
-```
-
-### Plant Module
-
-**`plant_species_cache`**
-```
-id, perenual_id INT UNIQUE, common_name TEXT, scientific_name TEXT,
-watering_frequency TEXT, sunlight TEXT, fertilizer_season TEXT,
-care_notes JSONB, cached_at TIMESTAMPTZ
-```
-
-**`plants`**
-```
-id, common_name TEXT NOT NULL, scientific_name TEXT,
-species_cache_id INT REFERENCES plant_species_cache(id),
-location TEXT, acquired_date DATE, image_url TEXT, notes TEXT,
-watering_interval_days INT, last_watered_at TIMESTAMPTZ,
-fertilized_at TIMESTAMPTZ, fertilize_interval_days INT,
-created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
-```
-
-**`care_events`**
-```
-id, plant_id INT REFERENCES plants(id) ON DELETE CASCADE,
-event_type VARCHAR(20) CHECK (event_type IN ('watered','fertilized','repotted','pruned','other')),
-occurred_at TIMESTAMPTZ DEFAULT NOW(), notes TEXT
-```
+`Transaction` has a `rawHash` field (SHA-256 of account + date + amount + description) with `@unique` — this is the deduplication key for bank import.
 
 ---
 
 ## 6. Docker Compose Services
-
-All defined in a single `docker-compose.yml` at the repo root. Profiles: `dev` for local development, `prod` for production serving.
 
 ```yaml
 services:
@@ -401,147 +238,103 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-oikos}
       POSTGRES_USER: ${POSTGRES_USER:-oikos}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      - db_data:/var/lib/postgresql/data
+      POSTGRES_DB: ${POSTGRES_DB:-oikos}
     ports:
-      - "5432:5432"    # only expose on dev; restrict in prod
-
-  backend:
-    build:
-      context: ./backend
-      target: dev        # multi-stage; dev uses nodemon, prod uses node directly
-    restart: unless-stopped
-    depends_on:
-      - db
-    environment:
-      NODE_ENV: ${NODE_ENV:-development}
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      SESSION_SECRET: ${SESSION_SECRET}
-      APP_PASSWORD: ${APP_PASSWORD}       # single-user auth password
-      UPLOADS_DIR: /app/uploads
-      CLAUDE_BIN: /usr/local/bin/claude   # path to claude CLI on host (or in image)
+      - "5432:5432"
     volumes:
-      - ./backend/src:/app/src            # dev: hot-reload source
-      - uploads:/app/uploads
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-oikos} -d ${POSTGRES_DB:-oikos}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile.dev
+    volumes:
+      - ./server/src:/app/server/src       # nodemon watches this
+      - ./client/src:/app/client/src       # Vite HMR watches this
+      - ./server/uploads:/app/server/uploads
+      - ./packages/shared/src:/app/packages/shared/src
     ports:
       - "3001:3001"
-    profiles: [dev, prod]
-
-  frontend:
-    build:
-      context: ./frontend
-      target: dev        # dev: runs vite dev server; prod: nginx static
-    restart: unless-stopped
+    env_file: .env
     depends_on:
-      - backend
-    environment:
-      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:3001}
-    volumes:
-      - ./frontend/src:/app/src           # dev: Vite HMR
-    ports:
-      - "5173:5173"
-    profiles: [dev]
-
-  frontend-prod:
-    build:
-      context: ./frontend
-      target: prod       # runs nginx to serve static build
-    restart: unless-stopped
-    depends_on:
-      - backend
-    ports:
-      - "80:80"
-    profiles: [prod]
+      db:
+        condition: service_healthy
 
 volumes:
-  db_data:
-  uploads:
+  postgres_data:
 ```
 
-**Environment variables (`.env.example`):**
-```
-POSTGRES_DB=oikos
-POSTGRES_USER=oikos
-POSTGRES_PASSWORD=changeme
-SESSION_SECRET=changeme_long_random_string
-APP_PASSWORD=changeme
-NODE_ENV=development
-VITE_API_BASE_URL=http://localhost:3001
-```
+**Single entry point:** both the API and the frontend are served on `http://localhost:3001`.
 
 **Dev workflow:**
 ```bash
-docker compose --profile dev up
+docker compose up --build
+# Backend restarts on .ts file save (nodemon --legacy-watch)
+# Frontend hot-reloads via Vite HMR
 ```
-Backend restarts on file save (nodemon); frontend hot-reloads via Vite.
 
-**Production:**
+**After any `prisma migrate dev` / `prisma db push`:**
 ```bash
-docker compose --profile prod up -d
+docker compose restart server
 ```
-Frontend is a static nginx build. Backend runs `node src/server.js`.
+`tsx watch` caches the Prisma client module and does not reload it on file changes. Without a restart, new schema fields return `undefined` and silently fall through to defaults. This is a known tsx/Prisma limitation — always restart after schema changes.
 
 ---
 
 ## 7. Claude CLI Integration Pattern
 
-All AI calls go through `backend/src/services/claude.js`. The backend never calls the Anthropic SDK directly. Three tiers:
+All AI calls go through `server/src/services/claude.ts`. Nothing else calls `exec` for Claude.
 
 ### Tier 1 — Single-turn prompt
-For one-shot tasks: finance export analysis, savings suggestions, translation, recipe OCR.
+For one-shot tasks: finance analysis, savings suggestions, translation, recipe OCR.
 
 ```bash
-# Simple text prompt
-claude -p "Analyse the following transactions and suggest savings..." 
+# Text prompt
+claude -p "Analyse the following transactions..."
 
-# With Haiku model (translation, cheap tasks)
+# Haiku model for cheap tasks (translation)
 claude -p --model claude-haiku-4-5 "Translate this recipe title to German: ..."
 
-# With a context file (large finance export — avoids shell argument length limits)
-claude -p "$(cat /tmp/oikos-context-abc123.json)" "Analyse spending patterns..."
-# Or using stdin piping:
-cat /tmp/oikos-context-abc123.json | claude -p "Analyse this finance export for savings opportunities"
+# Large context via temp file (avoids shell arg length limits)
+cat /tmp/oikos-ctx-<uuid>.json | claude -p "Analyse this finance export..."
 ```
 
-Large context (e.g. full transaction export) is written to a temp file first (`/tmp/oikos-<uuid>.json`), then piped in or referenced. The temp file is deleted after the call completes.
+Large context is written to a temp file (`/tmp/oikos-<uuid>.json`), piped in, then deleted in a `finally` block.
 
 ### Tier 2 — Session-based multi-turn (Gardening Specialist chat)
-Uses `--session-id` to maintain conversation continuity across HTTP requests.
-
 ```bash
-# First turn: create session, inject plant context
-claude -p --session-id "garden-session-<userId>" \
-  "You are a gardening specialist. Here is the current state of the user's plants: <json>. 
-   User asks: When should I water my monstera?"
+claude -p --session-id "garden-<userId>" \
+  "You are a gardening specialist. Plant data: <json>. User: When should I water my monstera?"
 
-# Subsequent turns: same session-id, no need to re-inject context (Claude CLI maintains it)
-claude -p --session-id "garden-session-<userId>" \
-  "What about the fiddle-leaf fig?"
+# Subsequent turns reuse the same session-id
+claude -p --session-id "garden-<userId>" "What about the fiddle-leaf fig?"
 ```
-
-Session IDs are stored server-side (in-memory map or DB) keyed to the user's active chat. Sessions expire after a configurable idle timeout (e.g. 1 hour).
 
 ### Tier 3 — Image input (Recipe OCR, plant photo)
-Claude vision via `claude -p` with image path.
-
 ```bash
-# Image file on disk — pass as argument (check claude CLI image support syntax)
-claude -p --image /app/uploads/recipe-photo-abc123.jpg \
-  "Extract all ingredients and preparation steps from this recipe photo. 
-   Return JSON with fields: title, servings, ingredients (array of {quantity, unit, name}), steps (array of strings)."
+claude -p --image /app/server/uploads/recipe-<uuid>.jpg \
+  "Extract all ingredients and steps. Return JSON: { title, servings, ingredients: [{quantity, unit, name}], steps: [string] }"
 ```
 
-Image files come from the `uploads/` volume. The backend stores the upload, calls Claude, parses the JSON response, and then optionally deletes the image or retains it.
-
-**Error handling in the wrapper:**
-- All three tiers parse `stdout` for the response.
-- `stderr` is monitored — any output to stderr is treated as an error condition.
-- Exit code non-zero → throw with stderr content.
-- Response is expected to be plain text (for prompts) or JSON string (for structured extraction prompts). The wrapper does not auto-parse JSON — callers do that.
+**Error handling:** parse `stdout` for response; `stderr` non-empty is a warning; non-zero exit code is always an error (throws `AppError` status 502).
 
 ---
 
-*This document is a living reference. Update §5 when migrations add or rename tables. Update §6 when Docker services change. Update §7 if the Claude CLI interface changes.*
+## 8. Known Constraints
+
+### HTTPS and barcode scanning
+`getUserMedia` (camera access for barcode scanning) requires HTTPS except on `localhost`. The app currently runs over plain HTTP. This means barcode scanning will **not work** from a phone or other device connecting via LAN IP.
+
+**Resolution options (pick one before Phase 1):**
+- (a) Domain + Let's Encrypt via Caddy — cleanest, requires a public domain pointed at the server.
+- (b) Self-signed cert — browsers warn; user must manually trust on each device.
+- (c) Accept the limitation — barcode scanning only works from the machine running Docker (localhost).
+
+This is OQ-3. It does not block Phase 0 or the backend of Phase 1, but it blocks the scan UI being usable on a phone.

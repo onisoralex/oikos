@@ -17,6 +17,25 @@ Format:
 **Rejected:** Mobile-native app — user confirmed server + web is the target.
 **Why:** Server app allows centralized data, easier Claude API integration, accessible from any device via browser.
 
+## oikos-stack-typescript — 2026-05-13
+**Decision:** TypeScript throughout — server and client. `tsx watch` for dev HMR, strict mode.
+**Rejected:** Plain JavaScript — the reference project uses TS and Prisma's generated client is meaningless without it.
+**Why:** Type safety across the full stack, especially valuable with Prisma's generated types and shared types via `packages/shared`.
+
+## oikos-stack-prisma — 2026-05-13
+**Decision:** Prisma as ORM (`prisma migrate dev` for dev, `prisma migrate deploy` for prod).
+**Rejected:** raw `pg` + `node-pg-migrate` — previously recommended by Tech Specialist for PostgreSQL control.
+**Why:** Prisma + TypeScript is the pattern from the reference project. Generated client gives type-safe queries. Trade-off: less raw SQL control, but acceptable for this project's complexity.
+
+## oikos-stack-vite-middleware — 2026-05-13
+**Decision:** Vite runs as Express middleware (`middlewareMode: true`). Single Docker service (`server`) on port 3001. No separate frontend container.
+**Rejected:** Separate `frontend` Docker service — previously in the Tech Specialist spec.
+**Why:** Simpler Docker setup. Reference project uses this pattern. Frontend is a webapp served by the backend, not a standalone SPA with its own container.
+
+## oikos-stack-mui — 2026-05-13
+**Decision:** Material UI (MUI v6+) + Material Icons. Mobile-first layout.
+**Why:** Clean design system the user is familiar with. Mobile-first because the app will be used on phone (pantry scanning, plant care, shopping list).
+
 ## oikos-ai-strategy — 2026-05-12
 **Decision:** Claude is invoked via `claude -p` CLI subprocess, not the Anthropic SDK or API client.
 **Rejected:** Anthropic Python/Node SDK — user preference; avoids API key management in-app and SDK dependency.
