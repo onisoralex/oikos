@@ -1,0 +1,7 @@
+{
+  "name": "oikos",
+  "private": true,
+  "type": "module",
+  "workspaces": ["client", "server", "packages/*"],
+  "engines": { "node": ">=22.0.0" }
+}

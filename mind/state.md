@@ -9,6 +9,7 @@ _No active tasks._
 - `oikos-arch-feasibility-20260512-000001` — Tech Specialist: architecture & feasibility spec ✓
 - `oikos-integrations-research-20260512-000002` — Researcher: APIs, integrations, existing OSS tools ✓
 - `oikos-architecture-specs-20260513-000001` — Tech Specialist: architecture.md + foundation spec + pantry spec ✓
+- `oikos-server-pantry-backend-20260516-000001` — Developer: Phase 0 foundation + Phase 1 pantry backend ✓
 
 ## Blocked
 

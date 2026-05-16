@@ -1,0 +1,23 @@
+FROM node:22-alpine
+WORKDIR /app
+
+# Prisma query engine needs OpenSSL on Alpine — the binary engine links against it at runtime
+RUN apk add --no-cache openssl
+
+# Workspace manifests first — Docker caches this layer until any package.json changes
+COPY package.json ./
+COPY server/package.json ./server/
+COPY client/package.json ./client/
+COPY packages/shared/package.json ./packages/shared/
+
+RUN npm install
+
+# Prisma schema baked in at build time — client generation runs during npm install (postinstall)
+COPY server/prisma ./server/prisma
+RUN npm run db:generate --workspace=server
+
+# Source is bind-mounted at runtime for HMR (see docker-compose.yaml)
+# prisma db push syncs schema on start (no-op if unchanged)
+# --legacy-watch required on Windows Docker bind mounts: inotify events from the Windows
+# filesystem do not propagate to the Linux container, so nodemon falls back to polling
+CMD ["sh", "-c", "npx prisma db push --schema=./server/prisma/schema.prisma && npx nodemon --legacy-watch --watch server/src --ext ts --exec 'npx tsx server/src/index.ts'"]

@@ -1,0 +1,39 @@
+services:
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-oikos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-oikos}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-oikos} -d ${POSTGRES_DB:-oikos}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile.dev
+    volumes:
+      - ./server/src:/app/server/src       # nodemon watches this
+      - ./client/src:/app/client/src       # Vite HMR watches this
+      - ./server/uploads:/app/server/uploads
+      - ./packages/shared/src:/app/packages/shared/src
+    ports:
+      - "3001:3001"
+    env_file: .env
+    # without condition: service_healthy, the server starts before PostgreSQL is ready
+    # to accept connections and Prisma fails to connect
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

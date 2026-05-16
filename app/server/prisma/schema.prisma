@@ -1,0 +1,48 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Module models are added here as each phase is implemented.
+// Phase 1 (Pantry) adds: Product, PantryItem
+// Phase 2 (Recipes) adds: Recipe, RecipeIngredient, RecipeRating
+// etc.
+
+model Product {
+  id              Int          @id @default(autoincrement())
+  barcode         String?      @unique @db.VarChar(30)
+  name            String
+  brand           String?
+  category        String?
+  nutritionalInfo Json?        @map("nutritional_info")
+  imageUrl        String?      @map("image_url")
+  source          String       @default("manual") // 'off' | 'manual'
+  offId           String?      @map("off_id")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+  pantryItems     PantryItem[]
+
+  @@index([name])
+  @@map("products")
+}
+
+model PantryItem {
+  id         Int       @id @default(autoincrement())
+  productId  Int       @map("product_id")
+  product    Product   @relation(fields: [productId], references: [id])
+  quantity   Decimal   @db.Decimal(10, 3)
+  unit       String?   @db.VarChar(20)
+  expiryDate DateTime? @map("expiry_date") @db.Date
+  location   String?
+  notes      String?
+  addedAt    DateTime  @default(now()) @map("added_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  @@index([productId])
+  @@index([expiryDate])
+  @@map("pantry_items")
+}
