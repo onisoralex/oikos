@@ -50,3 +50,13 @@ Three invocation tiers:
 **Decision:** Finance import is file-based only (drag-and-drop or upload). No live bank connection.
 **Rejected:** python-fints / FinTS live sync — not planned, at least not initially.
 **Why:** Simplicity. User will provide a sample import file to define the parser format. Importer must deduplicate — recognize existing entries and only add new ones.
+
+## oikos-client-scaffold-combined — 2026-05-27
+**Decision:** Phase 0 client scaffold and Phase 1 pantry frontend were built in a single developer spawn rather than two sequential tasks.
+**Rejected:** Splitting into two tasks (scaffold first, then pantry UI).
+**Why:** Both are frontend-only work with no branching dependencies between them. Combining avoids a spawn-wait-spawn cycle and the developer can reference both specs in one pass.
+
+## oikos-product-id-filter-deferred — 2026-05-27
+**Decision:** `ProductDetailPage` "View pantry items" button navigates to `/pantry?product_id=<id>` but the backend list endpoint does not yet support filtering by `product_id`. Left with an inline comment, not implemented.
+**Rejected:** Adding `product_id` filter to the backend list endpoint in the same task.
+**Why:** Out of scope for the frontend task. The data model supports it trivially (one more WHERE clause in the service). Deferred to when the ProductDetail page is actually used.

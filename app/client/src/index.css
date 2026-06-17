@@ -1,0 +1,15 @@
+:root {
+  /* Font sizes */
+  --fs-primary: 1rem;
+  --fs-secondary: 0.875rem;
+  --fs-small: 0.75rem;
+
+  /* Spacing (supplement MUI's spacing system for custom components) */
+  --sp-page: 16px;
+}
+
+[data-theme="dark"] {
+  /* Override custom CSS vars for dark mode here.
+     MUI component colors are handled by ThemeProvider — only extend here
+     for custom CSS properties that MUI does not manage. */
+}

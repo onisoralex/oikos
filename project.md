@@ -45,6 +45,25 @@ Single user: Alex. Personal home server on a local network. No multi-user suppor
 - Live bank/investment sync
 - Push notifications
 
+## Current state — last updated 2026-05-27
+
+**Phase 0 (Foundation) — complete.** Full stack scaffold: Docker Compose, Express + Vite middleware, Prisma + PostgreSQL, JWT single-user auth, Claude CLI wrapper.
+
+**Phase 1 (Pantry) — complete, not yet run.** Backend and frontend are both built but the app has never been started. First boot is the immediate next step.
+
+**The app has never been started.** Do this first:
+1. `cd projects/oikos/app`
+2. Copy `.env.example` to `.env` and set `APP_PASSWORD`, `JWT_SECRET`, `POSTGRES_PASSWORD`
+3. `docker compose up --build`
+4. Open `http://localhost:3001` — login, add a pantry item, verify the expiry badge
+5. Fix any TypeScript or boot errors that surface, then the pantry module is done
+
+**After first successful run:** define Phase 2. Most natural next modules are **Shopping List** (depends on pantry data) or **Recipes**. Spawn a Tech Specialist to produce `docs/specs/02-<module>.md`, then a Developer to implement it.
+
+**Known gap to address at some point:** `ProductDetailPage` "View pantry items" link passes `?product_id=` but the backend list endpoint doesn't filter by it yet. One extra WHERE clause in `pantry.service.ts` — easy to add when ProductDetail is actually used.
+
+---
+
 ## References
 
 - Tech stack and architectural decisions: `mind/decisions.md`

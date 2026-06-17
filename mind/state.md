@@ -10,6 +10,7 @@ _No active tasks._
 - `oikos-integrations-research-20260512-000002` — Researcher: APIs, integrations, existing OSS tools ✓
 - `oikos-architecture-specs-20260513-000001` — Tech Specialist: architecture.md + foundation spec + pantry spec ✓
 - `oikos-server-pantry-backend-20260516-000001` — Developer: Phase 0 foundation + Phase 1 pantry backend ✓
+- `oikos-client-pantry-ui-20260527-000001` — Developer: Phase 0 client scaffold + Phase 1 pantry frontend ✓
 
 ## Blocked
 
@@ -17,15 +18,11 @@ _No blocked tasks._
 
 ---
 
-## Session handoff — 2026-05-16
+## Session handoff — 2026-05-27
 
-**Planning phase: complete.**
+**Phase 0 + Phase 1 (Pantry) fully implemented — backend and frontend.**
 
-Next session starts here: **Phase 0 — Foundation.**
-Spawn Developer with `docs/specs/00-foundation.md` as the spec. App code goes into `projects/oikos/app/`.
+Next session: first run of the app. Bring up Docker, run `npm install`, verify the app boots and works end to end. Address any TypeScript or import errors that surface. Then define Phase 2 (next module — likely Recipes or Shopping List).
 
-Key things to re-read at session start:
-- `project.md` — scope and goals
-- `mind/open-questions.md` — 7 deferred decisions (none block Phase 0)
-- `docs/specs/00-foundation.md` — implementation spec for Phase 0
-- `docs/architecture.md §8` — HTTPS constraint (relevant when Phase 1 scan UI is discussed)
+Known limitation to address:
+- `ProductDetailPage` "View pantry items" button navigates to `/pantry?product_id=<id>` but the backend list endpoint does not yet support `product_id` filtering — either add backend filter or change UI to something else.
